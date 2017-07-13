@@ -1,0 +1,51 @@
+.toolbarBox .process-icon-reset-tokens  {
+    background-image: url('../images/refresh-icon.png');
+}
+
+.toolbarBox .process-icon-download  {
+    background-image: url('../images/download-icon.png');
+}
+
+.toolbarBox .process-icon-export-products  {
+    background-image: url('../images/export-icon.png');
+}
+
+#ctrl-c-message {
+    display: none;
+    position: absolute;
+    text-align: center;
+    padding: 10px;
+    width: 120px;
+    background: #43D8FA;
+    color: white;
+    font-size: large;
+    border-radius: 8px;
+    z-index: 99999999;
+}
+
+#loggingForm {
+    margin-top: 15px;
+}
+
+.bob-header {
+    clear: both;
+    height: 60px;
+    margin-bottom: 20px;
+}
+
+.bob-ad {
+    float: right;
+    width: 468px;
+    height: 60px;
+    margin: 5px 15px 0 0;
+
+}
+
+.copy-button {
+    vertical-align: top !important;
+}
+
+#tokenExportUrl, #tokenDownloadUrl, #resetaudit {
+    width: 80%;
+    display: inline-block;
+}

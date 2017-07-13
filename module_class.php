@@ -1,0 +1,1144 @@
+<?php
+
+if (!defined('_PS_VERSION_')) {
+    exit;
+}
+
+/*
+ * It is required to have this class in separate file: Prestasop code analyzer throws "Parse Error" 
+ * if main module file contains word "use" like it does the following line.
+ */
+use com\extremeidea\bidorbuy\storeintegrator\core as bobsi;
+
+class BidorbuyStoreIntegrator extends Module {
+    private $exportUrl;
+    private $downloadUrl;
+    private $resetAuditUrl;
+    private $phpInfo;
+
+    public $bootstrap = true;
+
+    public function __construct() {
+        $this->name = bobsi\Version::$id;
+        $this->tab = 'export';
+        $this->version = bobsi\Version::getVersionFromString('2.0.7');
+        $this->author = bobsi\Version::$author;
+        $this->need_instance = 0;
+        $this->ps_versions_compliancy = array('min' => '1.5', 'max' => '1.6.9');
+        $this->displayName = $this->l(bobsi\Version::$name);
+        $this->description = $this->l(bobsi\Version::$description);
+
+        $this->bobsi_plugin_check_update();
+        parent::__construct();
+
+        $this->confirmUninstall = $this->l('Are you sure you want to uninstall this module?');
+
+        $warnings = array_merge(
+            bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getWarnings(),
+            bobsi\StaticHolder::getWarnings()->getBusinessWarnings()
+        );
+        
+        $this->warning = join('. ', $warnings);
+
+        $this->exportUrl = _PS_BASE_URL_ . __PS_BASE_URI__ . 'index.php?fc=module&module='
+            . bobsi\Version::$id . '&controller=export&' . bobsi\Settings::paramToken
+            . '=' . bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getSettings()->getTokenExport();
+
+        $this->downloadUrl = _PS_BASE_URL_ . __PS_BASE_URI__ . 'index.php?fc=module&module='
+            . bobsi\Version::$id . '&controller=download&' . bobsi\Settings::paramToken
+            . '=' . bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getSettings()->getTokenDownload();
+
+        $this->resetAuditUrl = _PS_BASE_URL_ . __PS_BASE_URI__ . 'index.php?fc=module&module='
+            . bobsi\Version::$id . '&controller=resetaudit&' . bobsi\Settings::paramToken
+            . '=' . bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getSettings()->getTokenDownload();
+
+        $this->phpInfo = _PS_BASE_URL_ . __PS_BASE_URI__ . 'index.php?fc=module&module='
+            . bobsi\Version::$id . '&controller=version&' . bobsi\Settings::paramToken
+            . '=' . bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getSettings()->getTokenDownload()
+            . '&phpinfo=y';
+
+//        TODO: features is not implemented
+//        $this->features = Feature::getFeatures($this->getDefaultLanguage());
+    }
+
+    public function install() {
+        if (Shop::isFeatureActive()) {
+            Shop::setContext(Shop::CONTEXT_ALL);
+        }
+
+        return
+            //1.0.0
+            parent::install()
+            && $this->updateConfigurationSettings()
+            && $this->registerHook('displayBackOfficeHeader')
+            //2.0.0
+            && Db::getInstance()->execute(bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getQueries()->getInstallAuditTableQuery())
+            && Db::getInstance()->execute(bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getQueries()->getInstallTradefeedTableQuery())
+            && Db::getInstance()->execute(bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getQueries()->getInstallTradefeedDataTableQuery())
+            && $this->addAllProductsInTradefeedQueue()
+            && $this->registerHook('actionProductUpdate')
+            && $this->registerHook('actionProductAdd')
+            && $this->registerHook('actionProductDelete')
+            && $this->registerHook('actionCategoryUpdate')
+            && $this->registerHook('actionObjectCategoryDeleteBefore')
+            && $this->registerHook('actionAttributeSave')
+            && $this->registerHook('actionAttributeDelete')
+            && $this->registerHook('actionAttributeGroupSave')
+            && $this->registerHook('actionAttributeGroupDelete');
+    }
+
+    public function uninstall() {
+        parent::uninstall();
+        return $this->deleteConfigurationSettings()
+        && Db::getInstance()->execute(bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getQueries()->getDropTablesQuery())
+        && $this->bobsi_delete_update_settings();      
+    }
+
+    public function hookDisplayBackOfficeHeader() {
+        $this->context->controller->addCSS($this->_path . 'assets/css/admin.css', 'all');
+        $this->context->controller->addJquery(); //Do not delete, even if jquery already added (for older versions)
+        $this->context->controller->addJS($this->_path . 'assets/js/admin.js');
+        $this->context->controller->addJS($this->_path . 'vendor/com.extremeidea.bidorbuy/storeintegrator-core/assets/js/admin.js');
+    }
+
+    public function hookActionProductUpdate($params) {
+        Db::getInstance()->execute(bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getQueries()->getAddJobQueries($params['product']->id, bobsi\Queries::STATUS_UPDATE
+        ));
+    }
+
+    public function hookActionProductAdd($params) {
+        Db::getInstance()->execute(bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getQueries()->getAddJobQueries($params['product']->id, bobsi\Queries::STATUS_NEW));
+    }
+
+    public function hookActionProductDelete($params) {
+        Db::getInstance()->execute(bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getQueries()->getAddJobQueries($params['product']->id, bobsi\Queries::STATUS_DELETE));
+    }
+
+    public function hookActionCategoryUpdate($params) {
+        $this->hookActionCategoryUpdateDelete($params['category']);
+    }
+
+    public function hookActionObjectCategoryDeleteBefore($params) {
+        $this->hookActionCategoryUpdateDelete($params['object']);
+    }
+
+    private function hookActionCategoryUpdateDelete($object) {
+        if (is_a($object, 'Category')) {
+
+            //If the category has been disabled - add it to ExcludedCategories
+            if (false == $object->active) {
+                $currentSettings = unserialize(bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getSettings()->serialize());
+                $currentSettings[bobsi\Settings::nameExcludeCategories][] = $object->id_category;
+                $this->updateConfigurationSettings($currentSettings);
+            }
+
+            $productsIds = $object->getProductsWs();
+            $productStatus = (isset($_POST['deleteMode']) && $_POST['deleteMode'] == 'delete') ? bobsi\Queries::STATUS_DELETE : bobsi\Queries::STATUS_UPDATE;
+
+            foreach ($productsIds as $p) {
+                if (isset($p['id'])) {
+                    Db::getInstance()->execute(bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getQueries()->getAddJobQueries((int)$p['id'], $productStatus));
+                }
+            }
+        }
+    }
+
+    public function hookActionAttributeSave($params) {
+        $this->actionAttribute($params);
+    }
+
+    public function hookActionAttributeDelete($params) {
+        $this->actionAttribute($params);
+    }
+
+    public function hookActionAttributeGroupSave($params) {
+        $this->actionAttributeGroup($params);
+    }
+
+    public function hookActionAttributeGroupDelete($params) {
+        $this->actionAttributeGroup($params);
+    }
+
+    private function actionAttribute($params) {
+        $productsIds = $this->getProductsByAttributes($params['id_attribute']);
+
+        foreach ($productsIds as $productsId) {
+            Db::getInstance()->execute(bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getQueries()->getAddJobQueries($productsId['id'], bobsi\Queries::STATUS_UPDATE));
+        }
+    }
+
+    private function actionAttributeGroup($params) {
+        $ag = new AttributeGroup($params['id_attribute_group']);
+        $attrs = $ag->getWsProductOptionValues();
+        $attrsIds = array();
+        foreach ($attrs as $a) {
+            $attrsIds[] = $a['id'];
+        }
+
+        $productsIds = $this->getProductsByAttributes($attrsIds);
+
+        foreach ($productsIds as $productsId) {
+            Db::getInstance()->execute(bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getQueries()->getAddJobQueries($productsId['id'], bobsi\Queries::STATUS_UPDATE));
+        }
+    }
+
+
+    public function displayForm() {
+        // Get default Language
+        $default_lang = $this->getDefaultLanguage();
+
+        $compress_libs_options = array();
+        foreach (bobsi\Settings::getCompressLibraryOptions() as $level => $opts) {
+            $compress_libs_options[] = array(
+                'id_option' => $level,
+                'name' => $level
+            );
+        }
+
+        $logging_level_options = array();
+        foreach (bobsi\Settings::getLoggingLevelOptions() as $level) {
+            $logging_level_options[] = array(
+                'id_option' => $level,
+                'name' => ucfirst($level)
+            );
+        }
+
+        $wordings = bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getSettings()->getDefaultWordings();
+
+        // Init Fields form array
+        $fields_form[0]['form'] = array(
+            'legend' => array(
+                'title' => $this->l($wordings[bobsi\Settings::nameExportConfiguration][bobsi\Settings::nameWordingsTitle]),
+                'icon' => 'icon-cogs'
+            ),
+            'input' => array(
+                array(
+                    'type' => 'text',
+                    'label' => $this->l($wordings[bobsi\Settings::nameFilename][bobsi\Settings::nameWordingsTitle]),
+                    'name' => bobsi\Settings::nameFilename,
+                    'size' => 40,
+                    'class' => 'fixed-width-xxl',
+                    'required' => true,
+                    'desc' => $wordings[bobsi\Settings::nameFilename][bobsi\Settings::nameWordingsDescription]
+                ),
+                array(
+                    'type' => 'select',
+                    'label' => $this->l($wordings[bobsi\Settings::nameCompressLibrary][bobsi\Settings::nameWordingsTitle]),
+                    'name' => bobsi\Settings::nameCompressLibrary,
+                    'class' => 'fixed-width-xxl',
+                    'required' => true,
+                    'desc' => $this->l($wordings[bobsi\Settings::nameCompressLibrary][bobsi\Settings::nameWordingsDescription]),
+                    'options' => array(
+                        'query' => $compress_libs_options,
+                        'id' => 'id_option',
+                        'name' => 'name'
+                    )
+                ),
+                array(
+                    'type' => 'text',
+                    'label' => $this->l($wordings[bobsi\Settings::nameDefaultStockQuantity][bobsi\Settings::nameWordingsTitle]),
+                    'name' => bobsi\Settings::nameDefaultStockQuantity,
+                    'size' => 40,
+                    'class' => 'fixed-width-xxl',
+                    'required' => true,
+                    'desc' => $this->l($wordings[bobsi\Settings::nameDefaultStockQuantity][bobsi\Settings::nameWordingsDescription]),
+                )
+            )
+        );
+
+        $fields_form[1]['form'] = array(
+            'legend' => array(
+                'title' => $this->l($wordings[bobsi\Settings::nameExportCriteria][bobsi\Settings::nameWordingsTitle]),
+            ),
+            'input' => array(
+                array(
+                    'type' => 'text',
+                    'label' => $this->l($wordings[bobsi\Settings::nameExportQuantityMoreThan][bobsi\Settings::nameWordingsTitle]),
+                    'name' => bobsi\Settings::nameExportQuantityMoreThan,
+                    'size' => 40,
+                    'class' => 'fixed-width-xxl',
+                    'required' => true,
+                    'hint' => $this->l($wordings[bobsi\Settings::nameExportQuantityMoreThan][bobsi\Settings::nameWordingsDescription])
+                ),
+                /*
+                 * Feature 3750
+                 */
+                array(
+                    'type' => 'radio',
+                    'label' =>  $this->l($wordings[bobsi\Settings::nameExportProductSummary][bobsi\Settings::nameWordingsTitle]),
+                    'name' => bobsi\Settings::nameExportProductSummary,
+                    'hint' => $this->l($wordings[bobsi\Settings::nameExportProductSummary][bobsi\Settings::nameWordingsDescription]),
+                    'is_bool' => true,
+                    'class' => 't',
+                    'values' => array(
+                        array(
+                            'id' => 'active_on',
+                            'value' => true,
+                            'label' => $this->l('Yes'),
+                        ),
+                        array(
+                            'id' => 'active_off',
+                            'value' => false,
+                            'label' => $this->l('No')
+                        )
+                    ),
+                ),
+                array(
+                    'type' => 'radio',
+                    'label' => $this->l($wordings[bobsi\Settings::nameExportProductDescription][bobsi\Settings::nameWordingsTitle]),
+                    'name' => bobsi\Settings::nameExportProductDescription,
+                    'hint' => $this->l($wordings[bobsi\Settings::nameExportProductDescription][bobsi\Settings::nameWordingsDescription]),
+                    'is_bool' => true,
+                    'class' => 't',
+                    'values' => array(
+                        array(
+                            'id' => 'active_on',
+                            'value' => true,
+                            'label' => $this->l('Yes')
+                        ),
+                        array(
+                            'id' => 'active_off',
+                            'value' => false,
+                            'label' => $this->l('No')
+                        )
+                    ),
+                ),
+                /*
+                 * End of Feature
+                 */
+                array(
+                    'type' => 'categories_select',
+                    'name' => bobsi\Settings::nameExcludeCategories,
+                    'label' => $this->l($wordings[bobsi\Settings::nameExcludeCategories][bobsi\Settings::nameWordingsTitle]),
+                    'category_tree' => $this->initCategoriesAssociation($this->getExportCategoriesIds(bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getSettings()->getExcludeCategories()))
+                ),
+//                array(
+//                    'type' => 'radio',
+//                    'label' => $this->l($wordings[bobsi\Settings::nameExportActiveProducts][bobsi\Settings::nameWordingsTitle]),
+//                    'name' => bobsi\Settings::nameExportActiveProducts,
+//                    'required' => true,
+//                    'class' => 't',
+//                    'is_bool' => true,
+//                    'values' => array(
+//                        array(
+//                            'id' => 1,
+//                            'value' => 1,
+//                            'label' => $this->l('Enabled')
+//                        ),
+//                        array(
+//                            'id' => 0,
+//                            'value' => 0,
+//                            'label' => $this->l('Disabled')
+//                        )
+//                    ),
+//                )
+            )
+        );
+
+        $fields_form[2]['form'] = array(
+            'legend' => array(
+                'title' => $this->l($wordings[bobsi\Settings::nameExportLinks][bobsi\Settings::nameWordingsTitle]),
+            ),
+            'input' => array(
+                array(
+                    'type' => 'text',
+                    'label' => $this->l($wordings[bobsi\Settings::nameExportUrl][bobsi\Settings::nameWordingsTitle]),
+                    'name' => bobsi\Settings::nameTokenExport,
+                    'size' => 120,
+                    'required' => false,
+                    'readonly' => true
+                ),
+
+                array(
+                    'type' => 'text',
+                    'label' => $this->l($wordings[bobsi\Settings::nameDownloadUrl][bobsi\Settings::nameWordingsTitle]),
+                    'name' => bobsi\Settings::nameTokenDownload,
+                    'size' => 120,
+                    'required' => false,
+                    'readonly' => true
+                ),
+                array(
+                    'type' => 'text',
+                    'label' => $this->l($wordings[bobsi\Settings::nameActionResetExportTables][bobsi\Settings::nameWordingsTitle]),
+                    'name' => bobsi\Settings::nameActionResetExportTables,
+                    'size' => 120,
+                    'required' => false,
+                    'readonly' => true,
+                    'desc' => $this->l($wordings[bobsi\Settings::nameActionResetExportTables][bobsi\Settings::nameWordingsDescription])
+                )
+
+            ),
+            'submit' => array(
+                'title' => $this->l('Save'),
+            ),
+            'buttons' => array(
+                'export-products' => array(
+                    'href' => $this->exportUrl,
+                    'title' => $this->l($wordings[bobsi\Settings::nameButtonExport][bobsi\Settings::nameWordingsTitle]),
+                    'target' => true,
+                    'icon' => 'process-icon-export'
+                ),
+                'download' => array(
+                    'href' => $this->downloadUrl,
+                    'title' => $this->l($wordings[bobsi\Settings::nameButtonDownload][bobsi\Settings::nameWordingsTitle]),
+                    'target' => true,
+                    'icon' => 'process-icon-download'
+                ),
+                'launch-reset-export-tables' => array(
+                    'href' => $this->resetAuditUrl,
+                    'title' => $this->l($wordings[bobsi\Settings::nameActionResetExportTables][bobsi\Settings::nameWordingsTitle]),
+                    'target' => true,
+                    'icon' => 'process-icon-eraser',
+                    'id' => 'launch-reset-audit-button'
+                ),
+                'reset-tokens' => array(
+                    'href' => AdminController::$currentIndex . '&token=' . Tools::getAdminTokenLite('AdminModules') .
+                        '&configure=' . bobsi\Version::$id . '&do=' . bobsi\Settings::nameActionReset,
+                    'title' => $this->l($wordings[bobsi\Settings::nameButtonReset][bobsi\Settings::nameWordingsTitle]),
+                    'icon' => 'process-icon-reset'
+                )
+            )
+        );
+
+        $fields_form[3]['form'] = array(
+            'legend' => array(
+                'title'=> 'Debug'
+            ),
+            'input' => array(
+                array(
+                    'type' => 'text',
+                    'label' => $this->l($wordings[bobsi\Settings::nameUsername][bobsi\Settings::nameWordingsTitle]),
+                    'name' => bobsi\Settings::nameUsername,
+                    'class' => 'fixed-width-xxl',
+                    'size' => 40,
+                    'required' => false,
+                    'desc' => $wordings[bobsi\Settings::nameUsername][bobsi\Settings::nameWordingsDescription]
+                ),
+                array(
+                    'type' => 'password',
+                    'label' => $this->l($wordings[bobsi\Settings::namePassword][bobsi\Settings::nameWordingsTitle]),
+                    'name' => bobsi\Settings::namePassword,
+                    'size' => 40,
+                    'class' => 'fixed-width-xxl',
+                    'required' => false,
+                    'desc' => $wordings[bobsi\Settings::namePassword][bobsi\Settings::nameWordingsDescription]
+                )
+            )
+        );
+        
+        
+        $fields_form[4]['form'] = array(
+            'legend' => array(
+                'title'=> 'Debug'
+            ),
+            'input' => array(
+                array(
+                    'type' => 'text',
+                    'label' => $this->l($wordings[bobsi\Settings::nameEmailNotificationAddresses][bobsi\Settings::nameWordingsTitle]),
+                    'name' => bobsi\Settings::nameEmailNotificationAddresses,
+                    'size' => 40,
+                    'class' => 'fixed-width-xxl',
+                    'desc' => $this->l($wordings[bobsi\Settings::nameEmailNotificationAddresses][bobsi\Settings::nameWordingsDescription])
+                ),
+                array(
+                    'type' => 'radio',
+                    'label' => $this->l($wordings[bobsi\Settings::nameEnableEmailNotifications][bobsi\Settings::nameWordingsTitle]),
+                    'name' => bobsi\Settings::nameEnableEmailNotifications,
+                    'required' => true,
+                    'class' => 't',
+                    'is_bool' => true,
+                    'values' => array(
+                        array(
+                            'id' => 1,
+                            'value' => 1,
+                            'label' => $this->l('Enabled')
+                        ),
+                        array(
+                            'id' => 0,
+                            'value' => 0,
+                            'label' => $this->l('Disabled')
+                        )
+                    ),
+                ),
+                array(
+                    'type' => 'select',
+                    'label' => $this->l($wordings[bobsi\Settings::nameLoggingLevel][bobsi\Settings::nameWordingsTitle]),
+                    'name' => bobsi\Settings::nameLoggingLevel,
+                    'class' => 'fixed-width-xxl',
+                    'required' => true,
+                    'desc' => $this->l($wordings[bobsi\Settings::nameLoggingLevel][bobsi\Settings::nameWordingsDescription]),
+                    'options' => array(
+                        'query' => $logging_level_options,
+                        'id' => 'id_option',
+                        'name' => 'name'
+                    )
+                ),
+                array(
+                    'type' => 'hidden',
+                    'name' => 'hiddenPass'
+                )
+
+            )
+        );
+        
+        $hidden_fields[0]['form'] = array(
+            'input' => array(
+                array(
+                    'type' => 'hidden',
+                    'name' => bobsi\Settings::nameUsername
+                ),
+                array(
+                    'type' => 'hidden',
+                    'name' => bobsi\Settings::namePassword,
+                )
+            )
+        );
+
+        /* @var $helper HelperFormCore */
+        $helper = new HelperForm();
+
+        // Module, token and currentIndex
+        $helper->module = $this;
+        $helper->name_controller = $this->name;
+        $helper->token = Tools::getAdminTokenLite('AdminModules');
+        $helper->currentIndex = AdminController::$currentIndex . '&configure=' . $this->name;
+
+        // Language
+        $helper->default_form_language = $default_lang;
+        $helper->allow_employee_form_lang = $default_lang;
+
+        // Title and toolbar
+        $helper->title = $this->displayName;
+        $helper->show_toolbar = true;
+        $helper->toolbar_scroll = true;
+        $helper->submit_action = 'submit' . $this->name;
+        $helper->toolbar_btn = array(
+            'export-products' => array(
+                'href' => $this->exportUrl,
+                'desc' => $this->l($wordings[bobsi\Settings::nameButtonExport][bobsi\Settings::nameWordingsTitle]),
+                'target' => '_blank'
+            ),
+            'download' => array(
+                'href' => $this->downloadUrl,
+                'desc' => $this->l($wordings[bobsi\Settings::nameButtonDownload][bobsi\Settings::nameWordingsTitle]),
+                'target' => '_blank'
+            ),
+            'reset-tokens' => array(
+                'href' => AdminController::$currentIndex . '&token=' . Tools::getAdminTokenLite('AdminModules') .
+                    '&configure=' . bobsi\Version::$id . '&do=' . bobsi\Settings::nameActionReset,
+                'desc' => $this->l($wordings[bobsi\Settings::nameButtonReset][bobsi\Settings::nameWordingsTitle])
+            ),
+            'save' => array(
+                'desc' => $this->l('Save'),
+                'href' => AdminController::$currentIndex . '&configure=' . $this->name . '&save' . $this->name .
+                    '&token=' . Tools::getAdminTokenLite('AdminModules'),
+            ),
+            'back' => array(
+                'href' => AdminController::$currentIndex . '&token=' . Tools::getAdminTokenLite('AdminModules'),
+                'desc' => $this->l('Back to list')
+            )
+        );
+
+        // Load current value
+        $helper->fields_value[bobsi\Settings::nameUsername] = bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getSettings()->getUsername();
+        $helper->fields_value[bobsi\Settings::namePassword] = bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getSettings()->getPassword();
+        $helper->fields_value['hiddenPass'] = bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getSettings()->getPassword();
+        $helper->fields_value[bobsi\Settings::nameFilename] = bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getSettings()->getFilename();
+        $helper->fields_value[bobsi\Settings::nameCompressLibrary] = bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getSettings()->getCompressLibrary();
+        $helper->fields_value[bobsi\Settings::nameDefaultStockQuantity] = bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getSettings()->getDefaultStockQuantity();
+        $helper->fields_value[bobsi\Settings::nameEmailNotificationAddresses] = bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getSettings()->getEmailNotificationAddresses();
+        $helper->fields_value[bobsi\Settings::nameEnableEmailNotifications] = bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getSettings()->getEnableEmailNotifications();
+        $helper->fields_value[bobsi\Settings::nameLoggingLevel] = bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getSettings()->getLoggingLevel();
+        $helper->fields_value[bobsi\Settings::nameExportQuantityMoreThan] = bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getSettings()->getExportQuantityMoreThan();
+        /*
+        * Feature #3750     
+        */
+        $helper->fields_value[bobsi\Settings::nameExportProductSummary] = bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getSettings()->getExportProductSummary();
+        $helper->fields_value[bobsi\Settings::nameExportProductDescription] = bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getSettings()->getExportProductDescription();
+
+        /*
+         * End Feature Block
+         */
+//        $helper->fields_value[bobsi\Settings::nameExportActiveProducts] = $this->bidorbuyStoreIntegrator->getSettings()->getExportActiveProducts();
+        $helper->fields_value[bobsi\Settings::nameTokenExport] = $this->exportUrl;
+        $helper->fields_value[bobsi\Settings::nameTokenDownload] = $this->downloadUrl;
+        $helper->fields_value[bobsi\Settings::nameActionResetExportTables] = $this->resetAuditUrl;
+
+        $html = bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getLogsHtml();
+        $versionHtml =  "<div class=\"bob-version\"><a href=\"$this->phpInfo\" target='_blank'>@See PHP information</a><br>"
+            . bobsi\Version::getLivePluginVersion() . "</div>";
+
+        /* Feature 3910 */
+        $baa = Tools::getValue('baa');
+        if($baa != 1) {
+            $fields_form[3]['form'] = $hidden_fields[0]['form'];
+        }
+        /* End feature*/
+        return $this->displayError($this->warning) . $helper->generateForm($fields_form) . $html . $versionHtml;
+    }
+
+    public function getContent() {
+        $output = $this->getLogoHtml();
+        $wordings = bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getSettings()->getDefaultWordings();
+
+        $messages = bobsi\StaticHolder::getBidorbuyStoreIntegrator()->processAction(Tools::getValue(bobsi\Settings::nameLoggingFormAction),
+            array(bobsi\Settings::nameLoggingFormFilename => Tools::getValue(bobsi\Settings::nameLoggingFormFilename)));
+        if (count($messages) > 0) {
+            $output .= $this->displayConfirmation(implode(' ', $messages));
+        }
+
+        if (Tools::getValue('do') == bobsi\Settings::nameActionReset) {
+            bobsi\StaticHolder::getBidorbuyStoreIntegrator()->processAction(bobsi\Settings::nameActionReset);
+            $this->updateConfigurationSettings();
+
+            Tools::redirectAdmin(AdminController::$currentIndex . '&token=' . Tools::getAdminTokenLite('AdminModules') . '&configure=' . bobsi\Version::$id);
+        }
+
+        if (Tools::isSubmit('submit' . $this->name) AND Tools::getValue(bobsi\Settings::nameTokenExport)) {
+            $presaved_settings = array();
+            $prevent_saving = false;
+
+            $settings_checklist = array(
+                bobsi\Settings::nameUsername => 'strval',
+                bobsi\Settings::namePassword => 'strval',
+                bobsi\Settings::nameFilename => 'strval',
+                bobsi\Settings::nameCompressLibrary => 'strval',
+                bobsi\Settings::nameDefaultStockQuantity => 'intval',
+                bobsi\Settings::nameEmailNotificationAddresses => 'strval',
+                bobsi\Settings::nameEnableEmailNotifications => 'bool',
+                bobsi\Settings::nameLoggingLevel => 'strval',
+                bobsi\Settings::nameExportQuantityMoreThan => 'intval',
+                bobsi\Settings::nameExcludeCategories => 'categories',
+                /*
+                 *  Feature #3750
+                 */
+                bobsi\Settings::nameExportProductSummary => 'bool',
+                bobsi\Settings::nameExportProductDescription => 'bool',
+
+                /*
+                 * End Feature Block
+                 */
+//                bobsi\Settings::nameExportActiveProducts => 'bool'
+            );
+
+            foreach ($settings_checklist as $setting => $prevalidation) {
+                switch ($prevalidation) {
+                    case ('strval'):
+                        $presaved_settings[$setting] = strval(Tools::getValue($setting));
+                        break;
+                    case ('intval'):
+                        $presaved_settings[$setting] = Tools::getValue($setting);
+                        break;
+                    case ('bool'):
+                        $presaved_settings[$setting] = (bool)(Tools::getValue($setting));
+                        break;
+                    case ('categories'):
+                        $presaved_settings[$setting] = $this->getExportCategoriesIds(Tools::getValue('categoryBox'));
+                }
+
+                if (!call_user_func($wordings[$setting][bobsi\Settings::nameWordingsValidator], $presaved_settings[$setting])) {
+                    $output .= $this->displayError($this->l('Invalid value: ' . $wordings[$setting][bobsi\Settings::nameWordingsTitle]));
+                    $prevent_saving = true;
+                }
+            }
+
+            $presaved_settings[bobsi\Settings::nameTokenDownload] = strval(bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getSettings()->getTokenDownload());
+            $presaved_settings[bobsi\Settings::nameTokenExport] = strval(bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getSettings()->getTokenExport());
+
+            if (!$prevent_saving) {
+                $this->updateConfigurationSettings($presaved_settings);
+
+                $previousSettings = bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getSettings()->serialize(true);
+                bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getSettings()->unserialize(Configuration::get(bobsi\Settings::name), true);
+
+                $newSettings = bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getSettings()->serialize(true);
+
+                if (bobsi\StaticHolder::getBidorbuyStoreIntegrator()->checkIfExportCriteriaSettingsChanged($previousSettings, $newSettings, true)) {
+                    Db::getInstance()->execute(bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getQueries()->getTruncateJobsQuery());
+                    Db::getInstance()->execute(bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getQueries()->getTruncateProductQuery());
+                    $this->addAllProductsInTradefeedQueue(true);
+                }
+
+                $output .= $this->displayConfirmation($this->l('Settings updated successfully'));
+            }
+        }
+
+        return $output . $this->displayForm();
+    }
+
+    public function getLogoHtml() {
+        return '<div class="bob-header" style="background: #ffffff url(' . $this->_path . '/assets/images/bidorbuy.png) no-repeat;">
+            <div class="bob-ad">
+                <!-- BEGIN ADVERTPRO CODE BLOCK -->
+                <script type="text/javascript">
+                    document.write(\'<scr\' + \'ipt src="http://nope.bidorbuy.co.za/servlet/view/banner/javascript/zone?zid=153&pid=0&random=\' + Math.floor(89999999 * Math.random() + 10000000) + \'&millis=\' + new Date().getTime() + \'&referrer=\' + encodeURIComponent(document.location) + \'" type="text/javascript"></scr\' + \'ipt>\');
+                </script>
+                <!-- END ADVERTPRO CODE BLOCK -->
+            </div>
+        </div>';
+    }
+
+//    TODO: refactorit
+    private function initCategoriesAssociation($selected_cat = null, $input_name = 'categoryBox') {
+        $selected_cat = empty($selected_cat) ? array(0) : $selected_cat;
+        $disabled_cats = $this->getDisabledCategories();
+
+        if (version_compare(_PS_VERSION_, '1.6.0', '>=') === true) {
+            $tree_categories_helper = new HelperTreeCategories('categories-treeview');
+            $tree_categories_helper->setRootCategory((Shop::getContext() == Shop::CONTEXT_SHOP ? Category::getRootCategory()->id_category : 0))->setUseCheckBox(true);
+            $tree_categories_helper->setSelectedCategories($selected_cat);
+            $tree_categories_helper->setDisabledCategories($disabled_cats);
+            return $tree_categories_helper->render();
+        } else {
+            if (Shop::getContext() == Shop::CONTEXT_SHOP) {
+                $root_category = Category::getRootCategory();
+                $root_category = array('id_category' => $root_category->id_category, 'name' => $root_category->name);
+            } else {
+                $root_category = array('id_category' => '0', 'name' => $this->l('Root'));
+            }
+            $tree_categories_helper = new Helper();
+            //Passing disabled_categories to this function has no effect. So the crutch for PS 1.5 was added:
+            return $tree_categories_helper->renderCategoryTree($root_category, $selected_cat, $input_name)
+            . '<script> var disabledCats = "' . implode(',', $disabled_cats) . '" </script>';
+        }
+    }
+
+    public function getBreadcrumb($categoryId) {
+        $category = new Category($categoryId);
+        $parents = $category->getParentsCategories();
+
+        $names = array();
+        foreach ($parents as $c) {
+            array_unshift($names, $c['name']);
+        }
+
+        return implode(' > ', $names);
+    }
+
+    /**
+     * @param int $product
+     * @return array
+     */
+    public function &exportProducts(&$product) {
+        $languageId = $this->getDefaultLanguage();
+
+        $exportQuantityMoreThan = bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getSettings()->getExportQuantityMoreThan();
+        $defaultStockQuantity = bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getSettings()->getDefaultStockQuantity();
+        $allowedCategories = $this->getExportCategoriesIds(bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getSettings()->getExcludeCategories());
+        $exportProducts = array();
+
+        $product = new Product($product, true, $languageId);
+
+        if (!$product->id) {
+            return $exportProducts;
+        }
+
+        bobsi\StaticHolder::getBidorbuyStoreIntegrator()->logInfo('Processing product id: ' . $product->id);
+        $productCategories = $product->getCategories();
+        $categoriesMatching = array_intersect($allowedCategories, $productCategories);
+        if (!$product->active OR empty($categoriesMatching)) {
+            return $exportProducts;
+        }
+
+        $variations = array();
+
+        if ($product->hasAttributes()) {
+
+            $combinations = $product->getAttributeCombinations($languageId);
+
+            $ids = array();
+            foreach ($combinations as $combination) {
+                $ids[$combination['id_product_attribute']][] = $combination;
+            }
+
+            foreach ($ids as $vid => $combinations) {
+                $variations[$vid]['vid'] = $vid;
+                foreach ($combinations as $combination) {
+                    $variations[$vid]['attributes'][$combination['group_name']] = $combination['attribute_name'];
+                    $variations[$vid]['reference'] = $combination['reference'];
+                    $variations[$vid]['quantity'] = $combination['quantity'];
+                    $variations[$vid]['weight'] = $combination['weight'];
+                }
+            }
+        } else {
+            $variations[] = array();
+        }
+
+        foreach ($variations as $variation) {
+            if (!empty($variation)) {
+                $product->quantity = $variation['quantity'];
+            }
+
+            if ($this->calcProductQuantity($product, $defaultStockQuantity) > $exportQuantityMoreThan) {
+                $tempProduct = $this->buildExportProduct($product, $variation);
+
+                if (intval($tempProduct[bobsi\Tradefeed::nameProductPrice]) <= 0) {
+                    bobsi\StaticHolder::getBidorbuyStoreIntegrator()->logInfo('Product price <= 0, skipping, product id: ' . $product->id);
+                    continue;
+                }
+
+                $exportProducts[bobsi\Tradefeed::nameProductSummary] = $product->description_short;
+                $exportProducts[bobsi\Tradefeed::nameProductDescription] = $product->description;
+                $categories = array();
+                $categoriesIds = array();
+
+                foreach ($categoriesMatching as $categoryId) {
+                    $categories[] = $this->getBreadcrumb($categoryId);
+                    $categoriesIds[] = $categoryId;
+                }
+                $tempProduct[bobsi\Settings::paramCategoryId] = bobsi\Tradefeed::categoryIdDelimiter . join(bobsi\Tradefeed::categoryIdDelimiter, $categoriesIds) . bobsi\Tradefeed::categoryIdDelimiter;
+                $tempProduct[bobsi\Tradefeed::nameProductCategory] = join(bobsi\Tradefeed::categoryNameDelimiter, $categories);
+                $exportProducts[] = $tempProduct;
+            } else {
+                bobsi\StaticHolder::getBidorbuyStoreIntegrator()->logInfo('QTY is not enough to export product id: ' . $product->id);
+            }
+        }
+
+        return $exportProducts;
+    }
+
+    private function getExportCategoriesIds($ids = array()) {
+        $sql = '';
+
+        if (!empty($ids)) {
+            $sql = ' and c.id_category not in (' . implode(',', $ids) . ') ';
+        }
+
+        return array_map(array($this, 'mapCategories2Ids'), Category::getCategories(false, true, false, $sql));
+    }
+
+    private function mapCategories2Ids($data) {
+        return intval($data['id_category']);
+    }
+
+    private function getDisabledCategories() {
+        $allCats = Category::getCategories(false, false, false);
+
+        $disabledCats = array();
+        foreach ($allCats as $cat) {
+            if ($cat['active'] == 0) {
+                $disabledCats[] = intval($cat['id_category']);
+            }
+        }
+
+        return $disabledCats;
+    }
+
+    private function &buildExportProduct(Product &$product, &$variations = array()) {
+        $exportedProduct = array();
+
+        $exportedProduct[bobsi\Tradefeed::nameProductId] = $product->id;
+        $exportedProduct[bobsi\Tradefeed::nameProductName] = $product->name;
+        $exportedProduct[bobsi\Tradefeed::nameProductCode] = $product->id;
+        if (!empty($variations)) {
+            $exportedProduct[bobsi\Settings::paramVariationId] = $variations['vid'];
+            $exportedProduct[bobsi\Tradefeed::nameProductCode] .= '-' . $variations['vid'];
+        }
+        if (!empty($variations['reference'])) {
+            $exportedProduct[bobsi\Tradefeed::nameProductCode] .= '-' . $variations['reference'];
+        } else {
+            if (!empty($product->reference)) $exportedProduct[bobsi\Tradefeed::nameProductCode] .= '-' . $product->reference;
+        }
+
+        $priceWithoutReduct = $product->getPriceWithoutReduct(false, isset($variations['vid']) ? $variations['vid'] : false);
+        $priceFinal = $product->getPrice(true, isset($variations['vid']) ? $variations['vid'] : null);
+
+        if ($priceFinal < $priceWithoutReduct) {
+            $exportedProduct[bobsi\Tradefeed::nameProductPrice] = $priceFinal;
+            $exportedProduct[bobsi\Tradefeed::nameProductMarketPrice] = $priceWithoutReduct;
+        } else {
+            $exportedProduct[bobsi\Tradefeed::nameProductPrice] = $priceFinal;
+            $exportedProduct[bobsi\Tradefeed::nameProductMarketPrice] = '';
+        }
+
+        $productCondition = bobsi\Tradefeed::conditionSecondhand;
+        if ($product->condition == 'new') {
+            $productCondition = bobsi\Tradefeed::conditionNew;
+        } else if ($product->condition == 'refurbished') {
+            $productCondition = bobsi\Tradefeed::conditionRefurbished;
+        } else if ($product->condition == 'used') {
+            $productCondition = bobsi\Tradefeed::conditionSecondhand;
+        }
+        $exportedProduct[bobsi\Tradefeed::nameProductCondition] = $productCondition;
+
+        $carriers = $product->getCarriers();
+        if (empty($carriers)) {
+            $carriers = Carrier::getCarriers($this->getDefaultLanguage());
+        }
+        $names = array();
+        foreach ($carriers as $carrier) {
+            $carrier = new Carrier((int)($carrier["id_carrier"]), $this->getDefaultLanguage());
+            if ($carrier->active) $names[] = $carrier->name;
+        }
+        $exportedProduct[bobsi\Tradefeed::nameProductShippingClass] = implode(', ', $names);
+
+        $exportedProduct[bobsi\Tradefeed::nameProductAttributes] = array(
+            'Brand' => $product->manufacturer_name
+        );
+
+        if ($product->height > 0) {
+            $exportedProduct[bobsi\Tradefeed::nameProductAttributes][bobsi\Tradefeed::nameProductAttrHeight] = $product->height;
+        }
+
+        if ($product->width > 0) {
+            $exportedProduct[bobsi\Tradefeed::nameProductAttributes][bobsi\Tradefeed::nameProductAttrWidth] = $product->width;
+        }
+
+        if ($product->depth > 0) {
+            $exportedProduct[bobsi\Tradefeed::nameProductAttributes][bobsi\Tradefeed::nameProductAttrLength] = $product->depth;
+        }
+
+        $weight = (float)($product->weight + (isset($variations['weight']) ? $variations['weight'] : 0));
+        if ($weight > 0) {
+            $exportedProduct[bobsi\Tradefeed::nameProductAttributes][bobsi\Tradefeed::nameProductAttrShippingWeight] = $weight . Configuration::get('PS_WEIGHT_UNIT');
+        }
+//            Features are not implemented, so no height, no weight, etc...
+//            $features = Feature::getFeatures($this->context->language->id, (Shop::isFeatureActive() && Shop::getContext() == Shop::CONTEXT_SHOP));
+//
+//            foreach ($features as $k => $tab_features)
+//            {
+//                $features[$k]['current_item'] = false;
+//                $features[$k]['val'] = array();
+//
+//                $custom = true;
+//                foreach ($product->getFeatures() as $tab_products)
+//                    if ($tab_products['id_feature'] == $tab_features['id_feature'])
+//                        $features[$k]['current_item'] = $tab_products['id_feature_value'];
+//
+//                $features[$k]['featureValues'] = FeatureValue::getFeatureValuesWithLang($this->context->language->id, (int)$tab_features['id_feature']);
+//                if (count($features[$k]['featureValues']))
+//                    foreach ($features[$k]['featureValues'] as $value)
+//                        if ($features[$k]['current_item'] == $value['id_feature_value'])
+//                            $custom = false;
+//
+//                if ($custom)
+//                    $features[$k]['val'] = FeatureValue::getFeatureValueLang($features[$k]['current_item']);
+//            }
+
+        if (isset($variations['attributes'])) {
+            foreach ($variations['attributes'] as $key => $value) {
+                $exportedProduct[bobsi\Tradefeed::nameProductAttributes][$key] = $value;
+            }
+        }
+
+        $product->quantity = (isset($variations['quantity'])) ? (int)$variations['quantity'] : $product->quantity;
+        $exportedProduct[bobsi\Tradefeed::nameProductAvailableQty] = $this->calcProductQuantity($product, bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getSettings()->getDefaultStockQuantity());
+
+
+        /**
+         * Get title image. Tag <imageURL> ... </imageURL>
+         */
+        $imageURL = Product::getCover($product->id);
+        if (isset($imageURL) && $imageURL) {
+            $exportedProduct[bobsi\Tradefeed::nameProductImageURL] = $this->context->link->getImageLink(
+                $product->link_rewrite, strval($product->id . '-' . $imageURL['id_image']));
+        }
+        
+        $images = array();
+        if (isset($variations['vid'])) {
+            $combination_images = $product->getCombinationImages($this->getDefaultLanguage());
+            if ($combination_images && is_array($combination_images) && isset($combination_images[$variations['vid']])) {
+                foreach ($combination_images[$variations['vid']] as $value) {
+                    $images[] = $value['id_image'];
+                }
+            }
+        }
+
+        if (empty($images)) {
+            $cover = Product::getCover($product->id);
+            $images[] = $cover['id_image'];
+        }
+
+        //Add all images except already added ones
+        $all_product_images = $product->getWsImages();
+        foreach ($all_product_images as $img) {
+            if (!empty($images) && in_array($img['id'], $images)) {
+                continue;
+            }
+            $images[] = $img['id'];
+            unset($img);
+        }
+
+        if (!empty($images) && isset($images[0])) {
+            //At this stage we have array with images ids. Let's fetch URLs!
+            foreach ($images as $img_id) {
+                $exportedProduct[bobsi\Tradefeed::nameProductImages][] = $this->context->link->getImageLink($product->link_rewrite, strval($product->id . '-' . $img_id));
+            }
+            $exportedProduct[bobsi\Tradefeed::nameProductImageURL] = $exportedProduct[bobsi\Tradefeed::nameProductImages][0];
+        }
+
+
+        return $exportedProduct;
+    }
+
+    private function calcProductQuantity($product, $default = 0) {
+//        return Product::isAvailableWhenOutOfStock($product->out_of_stock) ? $default : $product->quantity;
+        return $product->quantity > 0 ? $product->quantity : (Product::isAvailableWhenOutOfStock($product->out_of_stock) ? $default : 0);
+//        Product::isAvailableWhenOutOfStock($product->out_of_stock) // <--- if always available, return true
+    }
+
+    public function export($token, $productsIds = false, $productStatus = bobsi\Queries::STATUS_UPDATE) {
+        $exportConfiguration = array(
+            bobsi\Settings::paramIds => $productsIds,
+            bobsi\Settings::paramProductStatus => $productStatus,
+            bobsi\Tradefeed::settingsNameExcludedAttributes => array('Width', 'Height', 'Length'),
+
+            bobsi\Settings::paramCallbackGetProducts => array($this, 'getProducts'),
+            bobsi\Settings::paramCallbackGetBreadcrumb => array($this, 'getBreadcrumb'),
+            bobsi\Settings::paramCallbackExportProducts => array($this, 'exportProducts'),
+            bobsi\Settings::paramCategories => $this->getExportCategoriesIds(bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getSettings()->getExcludeCategories()),
+            bobsi\Settings::paramExtensions => array()
+        );
+
+        if (Tools::getValue(bobsi\Settings::paramTimeStart)) {
+            $exportConfiguration[bobsi\Settings::paramTimeStart] = Tools::getValue(bobsi\Settings::paramTimeStart);
+        }
+
+        $modules = self::getModulesInstalled();
+        $extensions = &$exportConfiguration[bobsi\Settings::paramExtensions];
+        foreach ($modules as $module) {
+            $extensions[$module['name']] = $module['name'] . '/' . $module['active'] . ' ' . $module['version'];
+        }
+
+        bobsi\StaticHolder::getBidorbuyStoreIntegrator()->export($token, $exportConfiguration);
+    }
+
+    public function download($token) {
+        $exportConfiguration = array(
+            bobsi\Settings::paramCategories => $this->getExportCategoriesIds(bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getSettings()->getExcludeCategories()),
+        );
+        bobsi\StaticHolder::getBidorbuyStoreIntegrator()->download($token, $exportConfiguration);
+    }
+
+    public function downloadl($token) {
+        bobsi\StaticHolder::getBidorbuyStoreIntegrator()->downloadl($token);
+    }
+
+    public function showVersion($token, $phpinfo = false) {
+        bobsi\StaticHolder::getBidorbuyStoreIntegrator()->showVersion($token, $phpinfo);
+    }
+
+    public function resetAudit($token) {
+        if (!bobsi\StaticHolder::getBidorbuyStoreIntegrator()->canTokenDownload($token)) {
+            bobsi\StaticHolder::getBidorbuyStoreIntegrator()->show403Token($token);
+        }
+
+        Db::getInstance()->execute(bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getQueries()->getTruncateJobsQuery());
+        Db::getInstance()->execute(bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getQueries()->getTruncateProductQuery());
+        $this->addAllProductsInTradefeedQueue(true);
+        bobsi\StaticHolder::getBidorbuyStoreIntegrator()->resetaudit();
+    }
+
+    private function getDefaultLanguage() {
+        return (int)$this->context->language->id;
+    }
+
+    private function updateConfigurationSettings($settings = array()) {
+        if ($settings != null && is_array($settings)) {
+            return Configuration::updateValue(bobsi\Settings::name, bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getSettings()->serialize2($settings, true));
+        } else {
+            return Configuration::updateValue(bobsi\Settings::name, bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getSettings()->serialize(true));
+        }
+    }
+
+    private function deleteConfigurationSettings() {
+        return Configuration::deleteByName(bobsi\Settings::name);
+    }
+
+    private function getProductsByAttributes($attrIds) {
+        if (!is_array($attrIds)) {
+            $attrIds = array($attrIds);
+        }
+
+        if (empty($attrIds)) {
+            return array();
+        }
+
+        return Db::getInstance()->executeS('SELECT DISTINCT pa.`id_product` as id FROM `' . _DB_PREFIX_ . 'product_attribute` pa
+            LEFT JOIN `' . _DB_PREFIX_ . 'product_attribute_combination` pac ON pa.`id_product_attribute` = pac.`id_product_attribute`
+            WHERE pac.`id_attribute` IN (' . implode(',', $attrIds) . ')');
+    }
+
+    private function addAllProductsInTradefeedQueue($update = false) {
+        $productsIds = $this->getAllProductsIds();
+        for ($i = count($productsIds) - 1; $i >= 0; $i--) {
+            $productsIds[$i] = $productsIds[$i]['id_product'];
+        }
+
+        $productsIds = array_chunk($productsIds, 500);
+        $productStatus = ($update) ? bobsi\Queries::STATUS_UPDATE : bobsi\Queries::STATUS_NEW;
+
+        foreach ($productsIds as $page) {
+            if (!Db::getInstance()->execute(bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getQueries()->getAddJobQueries($page, $productStatus))) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function getAllProductsIds() {
+        return Db::getInstance()->executeS('SELECT id_product FROM `' . _DB_PREFIX_ . 'product` WHERE `active` = 1');
+    }
+
+    /**
+     * Update functions
+     */
+    private function bobsi_plugin_check_update() {
+        if (version_compare(_PS_VERSION_, '1.6.0.0','<')) {
+            $database_version = Configuration::get('bobsi_db_version');
+            
+            if ($database_version) {
+                if (version_compare($database_version, '2.0.5', '<')) {
+                    $this->bobsi_update();
+                }
+            } else {
+                $this->bobsi_update();
+            }
+        }
+    }
+
+    private function bobsi_update()
+    {
+        if($this->check_db_table()) {
+            if (! $this->check_field_exist()) {
+                $this->addAllProductsInTradefeedQueue(true);
+                $query = "ALTER TABLE " . _DB_PREFIX_ . bobsi\Queries::TABLE_BOBSI_TRADEFEED . " ADD `images` text AFTER `image_url`";
+                Db::getInstance()->execute($query);
+            } else {
+                Configuration::updateValue('bobsi_db_version', $this->version);
+            }
+        }
+
+    }
+
+    private function bobsi_delete_update_settings()
+    {
+        return Configuration::deleteByName('bobsi_db_version');
+    }
+    
+    private function check_db_table()
+    {
+        $check_audit_table = "SHOW TABLES LIKE '"._DB_PREFIX_.bobsi\Queries::TABLE_BOBSI_TRADEFEED_AUDIT."'";
+        $check_product_table = "SHOW TABLES LIKE '"._DB_PREFIX_.bobsi\Queries::TABLE_BOBSI_TRADEFEED."'";
+        $result = Db::getInstance()->executeS($check_audit_table) &&
+            Db::getInstance()->executeS($check_product_table);
+        
+        return $result;        
+    }
+    
+    private function check_field_exist()
+    {
+        $check_images_field = "
+          SELECT IF(count(*) = 1, true, false) AS result
+          FROM
+            information_schema.columns
+          WHERE
+            table_schema = '"._DB_NAME_."'
+            AND table_name = '"._DB_PREFIX_.bobsi\Queries::TABLE_BOBSI_TRADEFEED ."'
+            AND column_name = 'images';";
+        $field = Db::getInstance()->getRow($check_images_field);
+        
+        return $field['result'];
+    }
+}
