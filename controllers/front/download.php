@@ -17,7 +17,16 @@ if (!defined('_PS_VERSION_')) {
 
 use com\extremeidea\bidorbuy\storeintegrator\core as bobsi;
 
+/**
+ * Class BidorbuyStoreIntegratorDownloadModuleFrontController.
+ */
 class BidorbuyStoreIntegratorDownloadModuleFrontController extends ModuleFrontController {
+
+    /**
+     * Init Content
+     *
+     * @return void
+     */
     public function initContent() {
         parent::initContent();
 

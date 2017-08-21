@@ -5,8 +5,9 @@
  * This software is the proprietary information of Bidorbuy.
  *
  * All Rights Reserved.
- * Modification, redistribution and use in source and binary forms, with or without modification
- * are not permitted without prior written approval by the copyright holder.
+ * Modification, redistribution and use in source and binary forms, with or without
+ * modification are not permitted without prior written approval by the copyright
+ * holder.
  *
  * Vendor: EXTREME IDEA LLC http://www.extreme-idea.com
  */
@@ -19,11 +20,21 @@ if (!defined('_PS_VERSION_')) {
 
 use com\extremeidea\bidorbuy\storeintegrator\core as bobsi;
 
+/**
+ * Update ver 2.0.0
+ * 
+ * @param object $object module class
+ *
+ * @return bool
+ */
 function upgrade_module_2_0_0($object) {
     return
-        Db::getInstance()->execute(bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getQueries()->getInstallAuditTableQuery())
-        && Db::getInstance()->execute(bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getQueries()->getInstallTradefeedTableQuery())
-        && Db::getInstance()->execute(bobsi\StaticHolder::getBidorbuyStoreIntegrator()->getQueries()->getInstallTradefeedDataTableQuery())
+        Db::getInstance()->execute(bobsi\StaticHolder::getBidorbuyStoreIntegrator()
+            ->getQueries()->getInstallAuditTableQuery())
+        && Db::getInstance()->execute(bobsi\StaticHolder::getBidorbuyStoreIntegrator()
+            ->getQueries()->getInstallTradefeedTableQuery())
+        && Db::getInstance()->execute(bobsi\StaticHolder::getBidorbuyStoreIntegrator()
+            ->getQueries()->getInstallTradefeedDataTableQuery())
         && addAllProductsInTradefeedQueue()
         && $object->registerHook('actionProductUpdate')
         && $object->registerHook('actionProductAdd')
@@ -36,8 +47,18 @@ function upgrade_module_2_0_0($object) {
         && $object->registerHook('actionAttributeGroupDelete');
 }
 
-function addAllProductsInTradefeedQueue($update = false) {
-    $productsIds = Db::getInstance()->executeS('SELECT id_product FROM `' . _DB_PREFIX_ . 'product` WHERE `active` = 1');
+/**
+ * Add All Products In Tradefeed Queue
+ *
+ * @param bool $update update product flag
+ *
+ * @return bool
+ */
+function addAllProductsInTradefeedQueue($update = FALSE) {
+    $productsIds = Db::getInstance()->executeS(
+        'SELECT id_product FROM `' . _DB_PREFIX_ . 'product` WHERE `active` = 1'
+    );
+    
     for ($i = count($productsIds) - 1; $i >= 0; $i--) {
         $productsIds[$i] = $productsIds[$i]['id_product'];
     }
@@ -46,11 +67,12 @@ function addAllProductsInTradefeedQueue($update = false) {
 
     foreach ($productsIds as $page) {
         if (!Db::getInstance()->execute(bobsi\StaticHolder::getBidorbuyStoreIntegrator()
-            ->getQueries()->getAddJobQueries($page, $productStatus))) {
+            ->getQueries()->getAddJobQueries($page, $productStatus))
+        ) {
 
-            return false;
+            return FALSE;
         }
     }
 
-    return true;
+    return TRUE;
 }

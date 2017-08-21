@@ -5,23 +5,34 @@
  * This software is the proprietary information of Bidorbuy.
  *
  * All Rights Reserved.
- * Modification, redistribution and use in source and binary forms, with or without modification
- * are not permitted without prior written approval by the copyright holder.
+ * Modification, redistribution and use in source and binary forms, with or without
+ * modification are not permitted without prior written approval by the copyright
+ * holder.
  *
  * Vendor: EXTREME IDEA LLC http://www.extreme-idea.com
  */
 
 require_once(dirname(__FILE__) . '/../factory.php');
-require_once ('install-2.0.0.php');
+require_once('install-2.0.0.php');
 if (!defined('_PS_VERSION_')) {
     exit;
 }
 
 use com\extremeidea\bidorbuy\storeintegrator\core as bobsi;
 
-function upgrade_module_2_0_5($object) {    
+/**
+ * Update version 2.0.5
+ *
+ * @param object $object module cless
+ *
+ * @return bool
+ */
+function upgrade_module_2_0_5($object) {
     return
-       addAllProductsInTradefeedQueue(true)
-        && Db::getInstance()->execute("ALTER TABLE "._DB_PREFIX_.bobsi\Queries::TABLE_BOBSI_TRADEFEED." ADD `images` text AFTER `image_url`");
-        
+        addAllProductsInTradefeedQueue(TRUE)
+        && Db::getInstance()->execute(
+            "ALTER TABLE " . _DB_PREFIX_ . bobsi\Queries::TABLE_BOBSI_TRADEFEED
+            . " ADD `images` text AFTER `image_url`"
+        );
+
 }

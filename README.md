@@ -18,7 +18,7 @@ To make use of this plugin, you'll need to be an advanced seller on bidorbuy.
 
 ### System requirements
 
-Minimum PHP version required: 5.3.0 (5.6.16 for Prestashop 1.6.0.14).
+Supported PHP version: 5.4 (PHP 5.6.16 for Prestashop 1.6.0.14).
 
 PHP extensions: curl, mbstring.
 
@@ -27,7 +27,7 @@ PHP extensions: curl, mbstring.
 1. Log in to control panel as administrator.
 2. Go to Modules > Add New Module.
 3. Upload `bidorbuy-store-integrator` archive.
-4. Open 'Module' menu and enable the plugin.
+4. Open Module menu and enable the plugin.
 
 ### Uninstallation
 
@@ -43,12 +43,10 @@ To upgrade the plugin, please: 1. Re-install the archive (please, look through t
 ### Configuration
 
 1. Log in to control panel as administrator.
-2. Navigate to Modules > `bidorbuy Store-Integrator` > Press `Configure`.
+2. Navigate to Modules > bidorbuy Store-Integrator > Press Configure.
 3. Set the export criteria.
-4. Press the`Save` button.
-5. Press the`Export` button.
-6. Press the`Download` button.
+4. Press Save button.
+5. Press Export button.
+6. Press Download button.
 7. Share Export Links with bidorbuy.
 8. To display BAA fields on the setting page add '&baa=1' to URL in address bar.
-
-

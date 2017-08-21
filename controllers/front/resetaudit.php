@@ -17,7 +17,16 @@ if (!defined('_PS_VERSION_')) {
 
 use com\extremeidea\bidorbuy\storeintegrator\core as bobsi;
 
+/**
+ * Class BidorbuyStoreIntegratorResetAuditModuleFrontController.
+ */
 class BidorbuyStoreIntegratorResetAuditModuleFrontController extends ModuleFrontController {
+
+    /**
+     * Reset Audit Action
+     *
+     * @return void
+     */
     public function initContent() {
         parent::initContent();
 
