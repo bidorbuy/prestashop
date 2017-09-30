@@ -39,7 +39,7 @@ class BidorbuyStoreIntegrator extends Module {
     public function __construct() {
         $this->name = bobsi\Version::$id;
         $this->tab = 'export';
-        $this->version = bobsi\Version::getVersionFromString('2.0.8');
+        $this->version = bobsi\Version::getVersionFromString('2.0.9');
         $this->author = bobsi\Version::$author;
         $this->need_instance = 0;
         $this->ps_versions_compliancy = array('min' => '1.5', 'max' => '1.6.9');
