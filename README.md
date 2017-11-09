@@ -5,10 +5,11 @@
 
 | Product | PHP version  | Platform |
 | ------- | --- | --- |
-| Store Integrator-2.0.9 | 5.4 | ✓ Prestashop 1.5.3.1, 1.6.0.6 |
-| Store Integrator-2.0.8 | 5.4 | ✓ Prestashop 1.5.3.1, 1.6.0.6 |
-| Store Integrator-2.0.7 | 5.3, 5.4 | ✓ Prestashop 1.5.3.1, 1.6.0.6 |
-| Store Integrator-2.0.6 | 5.3 | ✓ Prestashop 1.5.3.1, 1.6.0.6 |
+| Store Integrator-2.0.10 | 5.4 | ✓ Prestashop 1.5.3.1, 1.6.0.6, Prestashop 1.6.0.14 |
+| Store Integrator-2.0.9  | 5.4 | ✓ Prestashop 1.5.3.1, 1.6.0.6 |
+| Store Integrator-2.0.8  | 5.4 | ✓ Prestashop 1.5.3.1, 1.6.0.6 |
+| Store Integrator-2.0.7  | 5.3, 5.4 | ✓ Prestashop 1.5.3.1, 1.6.0.6 |
+| Store Integrator-2.0.6  | 5.3 | ✓ Prestashop 1.5.3.1, 1.6.0.6 |
 
 ### Description
 
@@ -42,7 +43,11 @@ PHP extensions: curl, mbstring.
 
 ### Upgrade
 
-To upgrade the plugin, please: 1. Re-install the archive (please, look through the installation chapter). 2. Do a Reset export data. 3. Do an Export.
+To upgrade the plugin, please:
+
+1. Re-install the archive (please, look through the installation chapter). 
+2. Do a Reset export data. 
+3. Do an Export.
 
 ### Configuration
 

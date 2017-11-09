@@ -2,6 +2,12 @@
 
 ### Changelog
 
+#### 2.0.10
+* Fixed export in case if `Cache for JavaScript` is enabled.
+* Reporting each Reset Audit effort as an extra notification in a log file (only for Debug logging level).
+
+_[Updated on November 07, 2017]_
+
 #### 2.0.9
 * Corrected header processing in Store Integrators core.
 

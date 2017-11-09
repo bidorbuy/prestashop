@@ -62,17 +62,23 @@ jQuery(document).ready(function () {
         "<button type=\"button\" class=\"button copy-button btn btn-default\"  onclick=\"window.open('" + ResetAuditLink + "')\">Launch</button>");
 
     //For PrestaShop 1.5
-    if ($('#top_container').width()) {
+    if ($('#top_container').width() && $('#bidorbuy-configuration-filename').width()) {
         $('#fieldset_3 label:eq(0)').before(InfoBlock);
+        var flag = $('#username').attr('type') == 'hidden';
+        if (flag) {
+            $('#fieldset_3').css('display', 'none');
+        }
         $('#fieldset_4 .margin-form:eq(1)').after('<h4>Logs</h4>');
         $('.bob-version').wrap('<fieldset id="fieldset_ver"> <legend>Version</legend> </fieldset> ');
         $('#fieldset_ver').before('<br>');
 
     } else { // PrestaShop 1.6
-        $('#fieldset_3 .form-group:first').prepend(InfoBlock);
-        $('.bob-version').wrap('<div class="panel"> <div class="panel-heading">Version</div> </div>');
-        $('#loggingForm').before('<div id="submit2"></div>');
-        $('#loggingForm').before('<h4>Logs</h4>');
-        $('#configuration_form_submit_btn').clone().appendTo('#submit2')
+        if ($('#bidorbuy-configuration-filename').width()) {
+            $('#fieldset_3 .form-group:first').prepend(InfoBlock);
+            $('.bob-version').wrap('<div class="panel"> <div class="panel-heading">Version</div> </div>');
+            $('#loggingForm').before('<div id="submit2"></div>');
+            $('#loggingForm').before('<h4>Logs</h4>');
+            $('#configuration_form_submit_btn').clone().appendTo('#submit2')
+        }
     }
 });
