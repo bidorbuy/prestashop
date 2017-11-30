@@ -5,6 +5,7 @@
 
 | Product | PHP version  | Platform |
 | ------- | --- | --- |
+| Store Integrator-2.0.11 | 5.4 | ✓ Prestashop 1.5.3.1, 1.6.0.6, Prestashop 1.6.0.14 |
 | Store Integrator-2.0.10 | 5.4 | ✓ Prestashop 1.5.3.1, 1.6.0.6, Prestashop 1.6.0.14 |
 | Store Integrator-2.0.9  | 5.4 | ✓ Prestashop 1.5.3.1, 1.6.0.6 |
 | Store Integrator-2.0.8  | 5.4 | ✓ Prestashop 1.5.3.1, 1.6.0.6 |

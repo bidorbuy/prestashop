@@ -2,6 +2,11 @@
 
 ### Changelog
 
+#### 2.0.11
+* Added force CONVERT TO CHARACTER SET utf8_unicode_ci by default for next database tables: bobsi_tradefeed_product, bobsi_tradefeed_product_base, bobsi_tradefeed_audit.
+
+_[Updated on November 30, 2017]_
+
 #### 2.0.10
 * Fixed export in case if `Cache for JavaScript` is enabled.
 * Reporting each Reset Audit effort as an extra notification in a log file (only for Debug logging level).
